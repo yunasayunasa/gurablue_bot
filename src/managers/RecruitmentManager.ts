@@ -322,7 +322,7 @@ export class RecruitmentManager {
                 .setCustomId(`cancel_${recruitment.id}`)
                 .setLabel('参加取消')
                 .setStyle(ButtonStyle.Danger)
-        
+        );
         // 主催者用の締め切りボタン
         const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
