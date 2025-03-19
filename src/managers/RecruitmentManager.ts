@@ -322,16 +322,6 @@ export class RecruitmentManager {
                 .setCustomId(`cancel_${recruitment.id}`)
                 .setLabel('参加取消')
                 .setStyle(ButtonStyle.Danger)
-            // 前のコードの続き
-            new ButtonBuilder()
-                .setCustomId(`time_select_${recruitment.id}`)
-                .setLabel('参加可能時間を選択')
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(`cancel_${recruitment.id}`)
-                .setLabel('参加取消')
-                .setStyle(ButtonStyle.Danger)
-        );
         
         // 主催者用の締め切りボタン
         const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -719,11 +709,6 @@ export class RecruitmentManager {
             // ランダム値
             const randomValue = Math.random() * totalWeight;
             
-            // 選出
-            let cumulativeWeight = 0;
-            let selectedIndex = -1;
-            
-            for (let i = 0; i < availableItems.length; i++) {
             // 選出
             let cumulativeWeight = 0;
             let selectedIndex = -1;

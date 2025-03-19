@@ -12,3 +12,5 @@ export class Logger {
         if (process.env.DEBUG) {
             console.debug(`[DEBUG] ${new Date().toISOString()}: ${message}`);
         }
+    }
+    
