@@ -62,23 +62,19 @@ export async function handleCalendarButton(interaction: ButtonInteraction) {
             });
             
             // 時間選択ボタンを表示
-            // 時間選択ボタンを表示
             const timeButtons = generateTimeButtons(sessionId);
-            const { year, month } = session.calendarUI.getCurrentYearMonth();
+            const yearMonth = session.calendarUI.getCurrentYearMonth();
             
             await interaction.update({
-                content: `${session.contentType}募集 - ${year}年${month + 1}月${day}日の開始時間を選択してください：`,
+                content: `${session.contentType}募集 - ${yearMonth.year}年${yearMonth.month + 1}月${day}日の開始時間を選択してください：`,
                 components: timeButtons
             });
             
-            Logger.info(`${interaction.user.username} が日付を選択しました: ${year}年${month + 1}月${day}日`);
+            Logger.info(`${interaction.user.username} が日付を選択しました: ${yearMonth.year}年${yearMonth.month + 1}月${day}日`);
         }
     } catch (error) {
         Logger.error('カレンダーボタン処理エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -132,10 +128,7 @@ export async function handleTimeButton(interaction: ButtonInteraction) {
         Logger.info(`${interaction.user.username} が時間を選択しました: ${selectedTime}`);
     } catch (error) {
         Logger.error('時間選択ボタン処理エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -169,10 +162,7 @@ export async function handleParticipantTimeButton(interaction: ButtonInteraction
         Logger.info(`${interaction.user.username} が参加可能時間を設定しました: ${selectedTime} (募集ID: ${recruitmentId})`);
     } catch (error) {
         Logger.error('参加者時間選択エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -206,10 +196,7 @@ export async function handleElementButton(interaction: ButtonInteraction) {
         Logger.info(`${interaction.user.username} が ${element} 属性で参加表明しました (募集ID: ${recruitmentId})`);
     } catch (error) {
         Logger.error('属性選択エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -243,10 +230,7 @@ export async function handleContentPreferenceButton(interaction: ButtonInteracti
         Logger.info(`${interaction.user.username} がコンテンツ希望を設定しました: ${preferredContent} (募集ID: ${recruitmentId})`);
     } catch (error) {
         Logger.error('コンテンツ希望選択エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -279,10 +263,7 @@ export async function handleConfirmContentButton(interaction: ButtonInteraction)
         Logger.info(`${interaction.user.username} がコンテンツを確定しました: ${contentType} (募集ID: ${recruitmentId})`);
     } catch (error) {
         Logger.error('コンテンツ確定エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -313,10 +294,7 @@ export async function handleCancelParticipationButton(interaction: ButtonInterac
         Logger.info(`${interaction.user.username} が参加を取り消しました (募集ID: ${recruitmentId})`);
     } catch (error) {
         Logger.error('参加取消エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -345,10 +323,7 @@ export async function handleTimeSelectButton(interaction: ButtonInteraction) {
         Logger.info(`${interaction.user.username} が参加可能時間選択を開始しました (募集ID: ${recruitmentId})`);
     } catch (error) {
         Logger.error('参加者時間選択表示エラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
     }
 }
 
@@ -366,22 +341,49 @@ export async function handleCloseRecruitmentButton(interaction: ButtonInteractio
     const recruitmentId = match[1];
     
     try {
+        // 処理に時間がかかる可能性があるため、deferReplyを使用
+        await interaction.deferReply({ ephemeral: true });
+        
         const result = await recruitmentManager.closeRecruitment(
             recruitmentId,
             interaction.user.id
         );
         
-        await interaction.reply({
-            content: result.message,
-            ephemeral: true
+        // 処理結果を表示
+        await interaction.editReply({
+            content: result.message
         });
         
         Logger.info(`${interaction.user.username} が募集を締め切りました (募集ID: ${recruitmentId})`);
     } catch (error) {
         Logger.error('募集締め切りエラー:', error);
-        await interaction.reply({
-            content: '処理中にエラーが発生しました。もう一度お試しください。',
-            ephemeral: true
-        });
+        if (interaction.deferred) {
+            await interaction.editReply({
+                content: '処理中にエラーが発生しました。もう一度お試しください。'
+            });
+        } else {
+            await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
+        }
+    }
+}
+
+/**
+ * 安全にインタラクションに返信するためのヘルパー関数
+ */
+async function safeReply(interaction: ButtonInteraction, content: string): Promise<void> {
+    try {
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content,
+                ephemeral: true
+            });
+        } else {
+            await interaction.followUp({
+                content,
+                ephemeral: true
+            });
+        }
+    } catch (error) {
+        Logger.error('インタラクション返信エラー:', error);
     }
 }

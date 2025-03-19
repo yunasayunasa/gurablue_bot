@@ -54,82 +54,107 @@ client.once(Events.ClientReady, (c) => {
 
 // コマンド実行
 client.on(Events.InteractionCreate, async (interaction) => {
-    if (interaction.isCommand()) {
-        const command = client.commands.get(interaction.commandName);
-        
-        if (!command) return;
-        
-        try {
-            await command.execute(interaction);
-        } catch (error) {
-            Logger.error(`コマンド実行エラー: ${interaction.commandName}`, error);
-            const content = '実行中にエラーが発生しました。';
+    try {
+        if (interaction.isCommand()) {
+            const command = client.commands.get(interaction.commandName);
             
-            if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ content, ephemeral: true });
-            } else {
-                await interaction.reply({ content, ephemeral: true });
+            if (!command) return;
+            
+            try {
+                await command.execute(interaction);
+            } catch (error) {
+                Logger.error(`コマンド実行エラー: ${interaction.commandName}`, error);
+                const content = '実行中にエラーが発生しました。';
+                
+                if (interaction.replied || interaction.deferred) {
+                    await interaction.followUp({ content, ephemeral: true });
+                } else {
+                    await interaction.reply({ content, ephemeral: true });
+                }
             }
         }
-    }
-    
-    // ボタンインタラクション
-    if (interaction.isButton()) {
-        const customId = interaction.customId;
         
-        try {
-            if (customId.startsWith('calendar_')) {
-                await handleCalendarButton(interaction);
-            } else if (customId.match(/time_select_\d\d:\d\d_/)) {
-                await handleTimeButton(interaction);
-            } else if (customId.startsWith('participant_time_')) {
-                await handleParticipantTimeButton(interaction);
-            } else if (customId.startsWith('element_')) {
-                await handleElementButton(interaction);
-            } else if (customId.startsWith('content_')) {
-                await handleContentPreferenceButton(interaction);
-            } else if (customId.startsWith('confirm_content_')) {
-                await handleConfirmContentButton(interaction);
-            } else if (customId.startsWith('cancel_')) {
-                await handleCancelParticipationButton(interaction);
-            } else if (customId.match(/time_select_[^_]+$/)) {
-                await handleTimeSelectButton(interaction);
-            } else if (customId.startsWith('close_')) {
-                await handleCloseRecruitmentButton(interaction);
+        // ボタンインタラクション
+        if (interaction.isButton()) {
+            const customId = interaction.customId;
+            
+            try {
+                if (customId.startsWith('calendar_')) {
+                    await handleCalendarButton(interaction);
+                } else if (customId.match(/time_select_\d\d:\d\d_/)) {
+                    await handleTimeButton(interaction);
+                } else if (customId.startsWith('participant_time_')) {
+                    await handleParticipantTimeButton(interaction);
+                } else if (customId.startsWith('element_')) {
+                    await handleElementButton(interaction);
+                } else if (customId.startsWith('content_')) {
+                    await handleContentPreferenceButton(interaction);
+                } else if (customId.startsWith('confirm_content_')) {
+                    await handleConfirmContentButton(interaction);
+                } else if (customId.startsWith('cancel_')) {
+                    await handleCancelParticipationButton(interaction);
+                } else if (customId.match(/time_select_[^_]+$/)) {
+                    await handleTimeSelectButton(interaction);
+                } else if (customId.startsWith('close_')) {
+                    await handleCloseRecruitmentButton(interaction);
+                } else {
+                    Logger.info(`未処理のボタンID: ${customId}`);
+                }
+            } catch (error) {
+                Logger.error(`ボタンハンドリングエラー: ${customId}`, error);
+                await safeReply(interaction, '処理中にエラーが発生しました。もう一度お試しください。');
             }
-        } catch (error) {
-            Logger.error(`ボタンハンドリングエラー: ${customId}`, error);
-            await safeReply(interaction, '処理中にエラーが発生しました。');
         }
-    }
-    
-    // モーダル送信
-    if (interaction.isModalSubmit()) {
-        const customId = interaction.customId;
         
-        try {
-            if (customId.startsWith('recruit_modal_')) {
-                await handleRecruitModal(interaction);
+        // モーダル送信
+        if (interaction.isModalSubmit()) {
+            const customId = interaction.customId;
+            
+            try {
+                if (customId.startsWith('recruit_modal_')) {
+                    await handleRecruitModal(interaction);
+                } else {
+                    Logger.info(`未処理のモーダルID: ${customId}`);
+                }
+            } catch (error) {
+                Logger.error(`モーダル処理エラー: ${customId}`, error);
+                await safeReply(interaction, '処理中にエラーが発生しました。');
             }
-        } catch (error) {
-            Logger.error(`モーダル処理エラー: ${customId}`, error);
-            await safeReply(interaction, '処理中にエラーが発生しました。');
         }
+    } catch (error) {
+        Logger.error('インタラクションハンドリング中の予期せぬエラー:', error);
     }
 });
 
 // 安全な返信関数
 async function safeReply(interaction: ButtonInteraction | ModalSubmitInteraction, content: string): Promise<void> {
     try {
-        if (interaction.replied) {
-            await interaction.followUp({ content, ephemeral: true });
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content,
+                ephemeral: true
+            });
         } else {
-            await interaction.reply({ content, ephemeral: true });
+            await interaction.followUp({
+                content,
+                ephemeral: true
+            });
         }
     } catch (error) {
         Logger.error('返信エラー', error);
     }
 }
+
+// エラーハンドリング
+process.on('uncaughtException', (error) => {
+    Logger.error('未処理の例外:', error);
+    // ボットを終了させないようにエラーをキャッチ
+});
+
+process.on('unhandledRejection', (error) => {
+    Logger.error('未処理のPromiseリジェクション:', error);
+    // ボットを終了させないようにエラーをキャッチ
+});
 
 // ログイン
 client.login(config.token).catch(error => {

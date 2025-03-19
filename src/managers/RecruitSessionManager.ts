@@ -46,11 +46,12 @@ export class RecruitSessionManager {
         return session;
     }
     
-    // セッション更新
-    updateSession(sessionId: string, data: Partial<RecruitSession>): boolean {
+    // セッション更新 - 型の不整合を修正
+    updateSession(sessionId: string, data: Partial<Omit<RecruitSession, 'calendarUI' | 'id' | 'userId' | 'expiry'>>): boolean {
         if (!this.sessions.has(sessionId)) return false;
         
         const session = this.sessions.get(sessionId)!;
+        // calendarUI は上書きされないよう除外
         Object.assign(session, data);
         return true;
     }
