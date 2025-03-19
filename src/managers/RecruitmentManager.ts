@@ -6,7 +6,8 @@ import {
     StringSelectMenuBuilder,
     StringSelectMenuOptionBuilder,
     TextChannel,
-    Client
+    Client,
+    Message
 } from 'discord.js';
 import { 
     Recruitment, 
@@ -18,6 +19,16 @@ import {
 } from '../structures/Recruitment';
 import { config } from '../config';
 import { Logger } from '../utils/Logger';
+import { RECRUITMENT_CONSTANTS } from '../config/constants';
+import {
+    RecruitmentStatus,
+    ContentPreference,
+    ParticipantPreference,
+    RecruitmentResult,
+    RecruitmentError
+} from '../types/recruitment';
+
+type ChannelType = TextChannel | null;
 
 export class RecruitmentManager {
     private recruitments: Map<string, Recruitment> = new Map();
@@ -38,28 +49,27 @@ export class RecruitmentManager {
         hostName: string,
         channelId: string,
         note?: string
-    ): Promise<Recruitment | null> {
+    ): Promise<RecruitmentResult> {
         try {
-            // 日付と時間をパース
-            const [year, month, day] = dateStr.split('/').map(num => parseInt(num));
-            const [hour, minute] = timeStr.split(':').map(num => parseInt(num));
-            
-            const startTime = new Date(year, month - 1, day, hour, minute);
-            
-            // 現在時刻より前の時間は無効
-            if (startTime < new Date()) {
-                Logger.error(`無効な時間: ${dateStr} ${timeStr}`);
-                return null;
+            // 日付と時間の検証
+            const dateTime = this.validateDateTime(dateStr, timeStr);
+            if (!dateTime.success) {
+                return dateTime;
             }
+            
+            const startTime = dateTime.date!;
             
             // チャンネルを取得
-            const channel = await this.client.channels.fetch(channelId) as TextChannel;
+            const channel = await this.safeChannelFetch(channelId);
             if (!channel) {
-                Logger.error(`チャンネルが見つかりません: ${channelId}`);
-                return null;
+                return {
+                    success: false,
+                    message: `チャンネルが見つかりません: ${channelId}`,
+                    error: new RecruitmentError('Channel not found', 'CHANNEL_NOT_FOUND')
+                };
             }
             
-            // 募集メッセージを送信
+            // 募集メッセージを作成
             const recruitment: Recruitment = {
                 id: '',  // メッセージIDで後で設定
                 contentType,
@@ -72,40 +82,125 @@ export class RecruitmentManager {
                 status: 'open'
             };
             
-            // 募集メッセージを作成
             const embed = this.createRecruitmentEmbed(recruitment);
             const components = this.createRecruitmentComponents(recruitment);
             
-            const message = await channel.send({
-                embeds: [embed],
-                components: components
-            });
+            const message = await this.sendRecruitmentMessage(channel, embed, components);
+            if (!message) {
+                return {
+                    success: false,
+                    message: "メッセージの送信に失敗しました",
+                    error: new RecruitmentError('Failed to send message', 'MESSAGE_SEND_FAILED')
+                };
+            }
             
             // IDを設定して保存
             recruitment.id = message.id;
             this.recruitments.set(message.id, recruitment);
             
             Logger.info(`募集作成: ${message.id} (${contentType}, ${hostName})`);
-            return recruitment;
+            return {
+                success: true,
+                message: "募集の作成に成功しました"
+            };
         } catch (error) {
             Logger.error('募集作成エラー:', error);
+            return {
+                success: false,
+                message: "募集の作成に失敗しました",
+                error: error instanceof Error ? error : new Error(String(error))
+            };
+        }
+    }
+
+    /**
+     * チャンネルの安全な取得
+     */
+    private async safeChannelFetch(channelId: string): Promise<ChannelType> {
+        try {
+            const channel = await this.client.channels.fetch(channelId);
+            if (!channel || !(channel instanceof TextChannel)) {
+                throw new RecruitmentError(
+                    `Invalid channel type or not found: ${channelId}`,
+                    'INVALID_CHANNEL'
+                );
+            }
+            return channel;
+        } catch (error) {
+            Logger.error('Channel fetch error:', {
+                channelId,
+                error: error instanceof Error ? error.message : String(error)
+            });
             return null;
         }
     }
-    
+
     /**
-     * 募集を取得する
+     * 日付と時間の検証
      */
-    getRecruitment(recruitmentId: string): Recruitment | undefined {
-        return this.recruitments.get(recruitmentId);
+    private validateDateTime(dateStr: string, timeStr: string): RecruitmentResult & { date?: Date } {
+        try {
+            const [year, month, day] = dateStr.split('/').map(num => parseInt(num));
+            const [hour, minute] = timeStr.split(':').map(num => parseInt(num));
+            
+            if ([year, month, day, hour, minute].some(isNaN)) {
+                return {
+                    success: false,
+                    message: "無効な日付または時間形式です"
+                };
+            }
+            
+            const date = new Date(year, month - 1, day, hour, minute);
+            
+            if (date < new Date()) {
+                return {
+                    success: false,
+                    message: `無効な時間: ${dateStr} ${timeStr} (過去の日時は指定できません)`
+                };
+            }
+            
+            return {
+                success: true,
+                message: "日時の検証に成功しました",
+                date
+            };
+        } catch (error) {
+            return {
+                success: false,
+                message: "日付と時間の解析に失敗しました",
+                error: error instanceof Error ? error : new Error(String(error))
+            };
+        }
     }
-    
+
+    /**
+     * 募集メッセージの送信
+     */
+    private async sendRecruitmentMessage(
+        channel: TextChannel,
+        embed: EmbedBuilder,
+        components: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[]
+    ): Promise<Message | null> {
+        try {
+            return await channel.send({
+                embeds: [embed],
+                components
+            });
+        } catch (error) {
+            Logger.error('メッセージ送信エラー:', error);
+            return null;
+        }
+    }
+
+    // ... [続く]
+        // ... [前のコードの続き]
+
     /**
      * 募集メッセージ用のEmbedを作成
      */
-    createRecruitmentEmbed(recruitment: Recruitment): EmbedBuilder {
-        const dateStr = this.formatDate(recruitment.startTime);
-        const timeStr = this.formatTime(recruitment.startTime);
+    private createRecruitmentEmbed(recruitment: Recruitment): EmbedBuilder {
+        const dateStr = this.formatDateSafe(recruitment.startTime);
+        const timeStr = this.formatTimeSafe(recruitment.startTime);
         
         const embed = new EmbedBuilder()
             .setTitle(`【${this.getDisplayContentType(recruitment)}】募集`)
@@ -113,143 +208,194 @@ export class RecruitmentManager {
                 `**開催日時**: ${dateStr} ${timeStr}～\n` +
                 `**主催者**: ${recruitment.hostName}\n` +
                 (recruitment.note ? `**備考**: ${recruitment.note}\n` : '') +
-                `\n**参加者状況** (${recruitment.participants.size}/${config.defaults.participantLimit})\n`
+                `\n**参加者状況** (${recruitment.participants.size}/${RECRUITMENT_CONSTANTS.MAX_PARTICIPANTS})\n`
             )
             .setColor(config.colors.primary)
             .setTimestamp();
-            
-        // 参加者情報
+        
         if (recruitment.status === 'open') {
-            // 属性ごとに参加希望者を表示
-            const elementParticipants: Partial<Record<Element, string[]>> = {};
-            
-            // 初期化
-            ELEMENTS.forEach(element => {
-                elementParticipants[element] = [];
-            });
-            
-            // 参加者を集計
-            for (const [_, participant] of recruitment.participants.entries()) {
-                participant.preferredElements.forEach(element => {
-                    elementParticipants[element]?.push(participant.username);
-                });
-            }
-            
-            // 属性ごとの参加者を表示
-            for (const element of ELEMENTS) {
-                embed.addFields({
-                    name: element,
-                    value: elementParticipants[element]?.length 
-                        ? elementParticipants[element]!.join(', ')
-                        : '(未定)',
-                    inline: true
-                });
-            }
-            
-            // 参加可能時間
-            const availableTimes: Record<string, string[]> = {};
-            for (const [_, participant] of recruitment.participants.entries()) {
-                if (participant.availableFromTime) {
-                    if (!availableTimes[participant.availableFromTime]) {
-                        availableTimes[participant.availableFromTime] = [];
-                    }
-                    availableTimes[participant.availableFromTime].push(participant.username);
-                }
-            }
-            
-            if (Object.keys(availableTimes).length > 0) {
-                let timeText = '';
-                
-                // 時間順にソート
-                const sortedTimes = Object.keys(availableTimes).sort();
-                
-                for (const time of sortedTimes) {
-                    timeText += `${time}～: ${availableTimes[time].join(', ')}\n`;
-                }
-                
-                embed.addFields({
-                    name: '【参加可能時間】',
-                    value: timeText,
-                    inline: false
-                });
-            }
-            
-            // コンテンツ希望（参加者希望の場合）
-            if (recruitment.contentType === '参加者希望') {
-                const contentPreferences: Record<string, string[]> = {
-                    '天元': [],
-                    'ルシゼロ': [],
-                    'どれでも可': []
-                };
-                
-                for (const [_, participant] of recruitment.participants.entries()) {
-                    if (participant.preferredContent) {
-                        contentPreferences[participant.preferredContent].push(participant.username);
-                    }
-                }
-                
-                let contentText = '';
-                for (const [content, users] of Object.entries(contentPreferences)) {
-                    if (users.length > 0) {
-                        contentText += `${content}: ${users.join(', ')}\n`;
-                    }
-                }
-                
-                if (contentText) {
-                    embed.addFields({
-                        name: '【コンテンツ希望】',
-                        value: contentText,
-                        inline: false
-                    });
-                }
-            }
-        } else if (recruitment.status === 'closed') {
-            // 募集締め切り済み
-            ELEMENTS.forEach(element => {
-                const assignedUser = Array.from(recruitment.participants.values())
-                    .find(p => p.assignedElement === element);
-                
-                embed.addFields({
-                    name: `${element}`,
-                    value: assignedUser ? assignedUser.username : '(未定)',
-                    inline: true
-                });
-            });
-            
-            // 補欠リストがあれば表示
-            if (recruitment.waitingList && recruitment.waitingList.length > 0) {
-                const waitingUsers = recruitment.waitingList
-                    .map(id => recruitment.participants.get(id)?.username || id)
-                    .join(', ');
-                    
-                embed.addFields({
-                    name: '【補欠メンバー】',
-                    value: waitingUsers,
-                    inline: false
-                });
-            }
-            
-            embed.setColor(config.colors.closed);
+            this.addOpenRecruitmentFields(embed, recruitment);
+        } else {
+            this.addClosedRecruitmentFields(embed, recruitment);
         }
         
         return embed;
     }
-    
+
+    /**
+     * オープン状態の募集用のフィールドを追加
+     */
+    private addOpenRecruitmentFields(embed: EmbedBuilder, recruitment: Recruitment): void {
+        // 属性ごとの参加者を集計
+        const elementParticipants = this.aggregateElementParticipants(recruitment);
+        
+        // 属性ごとのフィールドを追加
+        for (const element of ELEMENTS) {
+            embed.addFields({
+                name: element,
+                value: elementParticipants[element]?.length 
+                    ? elementParticipants[element]!.join(', ')
+                    : '(未定)',
+                inline: true
+            });
+        }
+        
+        // 参加可能時間の表示
+        const timeInfo = this.createTimeAvailabilityInfo(recruitment);
+        if (timeInfo) {
+            embed.addFields(timeInfo);
+        }
+        
+        // コンテンツ希望の表示
+        if (recruitment.contentType === '参加者希望') {
+            const contentInfo = this.createContentPreferenceInfo(recruitment);
+            if (contentInfo) {
+                embed.addFields(contentInfo);
+            }
+        }
+    }
+
+    /**
+     * クローズ状態の募集用のフィールドを追加
+     */
+    private addClosedRecruitmentFields(embed: EmbedBuilder, recruitment: Recruitment): void {
+        ELEMENTS.forEach(element => {
+            const assignedUser = Array.from(recruitment.participants.values())
+                .find(p => p.assignedElement === element);
+            
+            embed.addFields({
+                name: element,
+                value: assignedUser ? assignedUser.username : '(未定)',
+                inline: true
+            });
+        });
+        
+        if (recruitment.waitingList?.length) {
+            const waitingUsers = recruitment.waitingList
+                .map(id => recruitment.participants.get(id)?.username || id)
+                .join(', ');
+            
+            embed.addFields({
+                name: '【補欠メンバー】',
+                value: waitingUsers,
+                inline: false
+            });
+        }
+        
+        embed.setColor(config.colors.closed);
+    }
+
+    /**
+     * 属性ごとの参加者を集計
+     */
+    private aggregateElementParticipants(recruitment: Recruitment): Record<Element, string[]> {
+        const elementParticipants: Partial<Record<Element, string[]>> = {};
+        
+        ELEMENTS.forEach(element => {
+            elementParticipants[element] = [];
+        });
+        
+        for (const [_, participant] of recruitment.participants.entries()) {
+            participant.preferredElements.forEach(element => {
+                elementParticipants[element]?.push(participant.username);
+            });
+        }
+        
+        return elementParticipants as Record<Element, string[]>;
+    }
+
+    /**
+     * 参加可能時間の情報を作成
+     */
+    private createTimeAvailabilityInfo(recruitment: Recruitment): { name: string; value: string; inline: boolean } | null {
+        const availableTimes: Record<string, string[]> = {};
+        
+        for (const [_, participant] of recruitment.participants.entries()) {
+            if (participant.availableFromTime) {
+                if (!availableTimes[participant.availableFromTime]) {
+                    availableTimes[participant.availableFromTime] = [];
+                }
+                availableTimes[participant.availableFromTime].push(participant.username);
+            }
+        }
+        
+        if (Object.keys(availableTimes).length === 0) {
+            return null;
+        }
+        
+        const timeText = Object.keys(availableTimes)
+            .sort()
+            .map(time => `${time}～: ${availableTimes[time].join(', ')}`)
+            .join('\n');
+        
+        return {
+            name: '【参加可能時間】',
+            value: timeText,
+            inline: false
+        };
+    }
+
+    /**
+     * コンテンツ希望の情報を作成
+     */
+    private createContentPreferenceInfo(recruitment: Recruitment): { name: string; value: string; inline: boolean } | null {
+        const contentPreferences: Record<ContentPreference, string[]> = {
+            '天元': [],
+            'ルシゼロ': [],
+            'どれでも可': []
+        };
+        
+        for (const [_, participant] of recruitment.participants.entries()) {
+            if (participant.preferredContent) {
+                contentPreferences[participant.preferredContent].push(participant.username);
+            }
+        }
+        
+        const contentText = Object.entries(contentPreferences)
+            .filter(([_, users]) => users.length > 0)
+            .map(([content, users]) => `${content}: ${users.join(', ')}`)
+            .join('\n');
+        
+        if (!contentText) {
+            return null;
+        }
+        
+        return {
+            name: '【コンテンツ希望】',
+            value: contentText,
+            inline: false
+        };
+    }
+
     /**
      * 募集メッセージのボタンを作成
      */
-    createRecruitmentComponents(recruitment: Recruitment): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
+    private createRecruitmentComponents(recruitment: Recruitment): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
         if (recruitment.status === 'closed') {
-            // 募集締め切り済み
             return [];
         }
         
         const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
         
-        // コンテンツタイプによって表示するボタンを変更
         if (recruitment.contentType === '参加者希望' && !recruitment.confirmedContent) {
-            // コンテンツ希望ボタン
-            const contentRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            rows.push(this.createContentPreferenceButtons(recruitment));
+            rows.push(this.createHostContentConfirmationButtons(recruitment));
+        } else {
+            rows.push(...this.createElementSelectionButtons(recruitment));
+        }
+        
+        rows.push(this.createCommonButtons(recruitment));
+        rows.push(this.createCloseButton(recruitment));
+        
+        return rows;
+    }
+
+    /**
+     * コンテンツ希望ボタンを作成
+     */
+    private createContentPreferenceButtons(recruitment: Recruitment): ActionRowBuilder<ButtonBuilder> {
+        return new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
                 new ButtonBuilder()
                     .setCustomId(`content_天元_${recruitment.id}`)
                     .setLabel('天元希望')
@@ -263,10 +409,17 @@ export class RecruitmentManager {
                     .setLabel('どれでも可')
                     .setStyle(ButtonStyle.Secondary)
             );
-            rows.push(contentRow);
-            
-            // 主催者用のコンテンツ確定ボタン
-            const hostRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    }
+
+    // ... [続く]
+        // ... [前のコードの続き]
+
+    /**
+     * 主催者用のコンテンツ確定ボタンを作成
+     */
+    private createHostContentConfirmationButtons(recruitment: Recruitment): ActionRowBuilder<ButtonBuilder> {
+        return new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
                 new ButtonBuilder()
                     .setCustomId(`confirm_content_天元_${recruitment.id}`)
                     .setLabel('天元に確定')
@@ -276,10 +429,14 @@ export class RecruitmentManager {
                     .setLabel('ルシゼロに確定')
                     .setStyle(ButtonStyle.Success)
             );
-            rows.push(hostRow);
-        } else {
-            // 属性選択ボタン（2行に分割）
-            const elementRow1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    }
+
+    /**
+     * 属性選択ボタンを作成
+     */
+    private createElementSelectionButtons(recruitment: Recruitment): ActionRowBuilder<ButtonBuilder>[] {
+        const elementRow1 = new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
                 new ButtonBuilder()
                     .setCustomId(`element_火_${recruitment.id}`)
                     .setLabel('火')
@@ -293,8 +450,9 @@ export class RecruitmentManager {
                     .setLabel('土')
                     .setStyle(ButtonStyle.Success)
             );
-            
-            const elementRow2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        
+        const elementRow2 = new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
                 new ButtonBuilder()
                     .setCustomId(`element_風_${recruitment.id}`)
                     .setLabel('風')
@@ -308,34 +466,40 @@ export class RecruitmentManager {
                     .setLabel('闇')
                     .setStyle(ButtonStyle.Secondary)
             );
-            
-            rows.push(elementRow1, elementRow2);
-        }
         
-        // 共通ボタン
-        const commonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`time_select_${recruitment.id}`)
-                .setLabel('参加可能時間を選択')
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId(`cancel_${recruitment.id}`)
-                .setLabel('参加取消')
-                .setStyle(ButtonStyle.Danger)
-        );
-        // 主催者用の締め切りボタン
-        const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`close_${recruitment.id}`)
-                .setLabel('募集を閉じる')
-                .setStyle(ButtonStyle.Primary)
-        );
-        
-        rows.push(commonRow, closeRow);
-        
-        return rows;
+        return [elementRow1, elementRow2];
     }
-    
+
+    /**
+     * 共通ボタンを作成
+     */
+    private createCommonButtons(recruitment: Recruitment): ActionRowBuilder<ButtonBuilder> {
+        return new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`time_select_${recruitment.id}`)
+                    .setLabel('参加可能時間を選択')
+                    .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                    .setCustomId(`cancel_${recruitment.id}`)
+                    .setLabel('参加取消')
+                    .setStyle(ButtonStyle.Danger)
+            );
+    }
+
+    /**
+     * 募集を閉じるボタンを作成
+     */
+    private createCloseButton(recruitment: Recruitment): ActionRowBuilder<ButtonBuilder> {
+        return new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`close_${recruitment.id}`)
+                    .setLabel('募集を閉じる')
+                    .setStyle(ButtonStyle.Primary)
+            );
+    }
+
     /**
      * 参加者を追加する
      */
@@ -344,66 +508,62 @@ export class RecruitmentManager {
         userId: string,
         username: string,
         preferredElement?: Element
-    ): Promise<{success: boolean, message: string}> {
-        const recruitment = this.recruitments.get(recruitmentId);
-        if (!recruitment) {
-            return { success: false, message: "募集が見つかりません。" };
-        }
-        
-        if (recruitment.status === 'closed') {
-            return { success: false, message: "この募集は既に締め切られています。" };
-        }
-        
-        // 既存の参加者情報を取得または新規作成
-        let participant = recruitment.participants.get(userId);
-        
-        if (!participant) {
-            participant = {
-                userId,
-                username,
-                preferredElements: [],
-                createdAt: new Date()
-            };
-            recruitment.participants.set(userId, participant);
-        }
-        
-        // 属性が指定されていれば追加
-        if (preferredElement) {
-            if (!participant.preferredElements.includes(preferredElement)) {
+    ): Promise<RecruitmentResult> {
+        try {
+            const recruitment = await this.getValidRecruitment(recruitmentId);
+            if (!recruitment.success) {
+                return recruitment;
+            }
+
+            const participant = this.getOrCreateParticipant(recruitment.data, userId, username);
+            
+            if (preferredElement && !participant.preferredElements.includes(preferredElement)) {
                 participant.preferredElements.push(preferredElement);
             }
+            
+            await this.updateRecruitmentMessage(recruitmentId);
+            
+            return {
+                success: true,
+                message: preferredElement 
+                    ? `${username}さんが${preferredElement}属性で参加表明しました！`
+                    : `${username}さんが参加表明しました！`
+            };
+        } catch (error) {
+            return this.handleError('参加者追加エラー', error);
         }
-        
-        // 募集メッセージを更新
-        await this.updateRecruitmentMessage(recruitmentId);
-        
-        return { 
-            success: true, 
-            message: preferredElement 
-                ? `${username}さんが${preferredElement}属性で参加表明しました！` 
-                : `${username}さんが参加表明しました！` 
-        };
     }
-    
+
     /**
-     * 参加者のコンテンツ希望を設定
+     * 有効な募集を取得
      */
-    async setParticipantContentPreference(
-        recruitmentId: string,
-        userId: string,
-        username: string,
-        preferredContent: "天元" | "ルシゼロ" | "どれでも可"
-    ): Promise<{success: boolean, message: string}> {
+    private async getValidRecruitment(recruitmentId: string): Promise<RecruitmentResult & { data?: Recruitment }> {
         const recruitment = this.recruitments.get(recruitmentId);
         if (!recruitment) {
-            return { success: false, message: "募集が見つかりません。" };
+            return { 
+                success: false, 
+                message: "募集が見つかりません。"
+            };
         }
         
         if (recruitment.status === 'closed') {
-            return { success: false, message: "この募集は既に締め切られています。" };
+            return { 
+                success: false, 
+                message: "この募集は既に締め切られています。"
+            };
         }
-        
-        // 既存の参加者情報を取得または新規作成
+
+        return {
+            success: true,
+            message: "募集が見つかりました",
+            data: recruitment
+        };
+    }
+
+    /**
+     * 参加者情報を取得または作成
+     */
+    private getOrCreateParticipant(recruitment: Recruitment, userId: string, username: string): ParticipantData {
         let participant = recruitment.participants.get(userId);
         
         if (!participant) {
@@ -411,165 +571,95 @@ export class RecruitmentManager {
                 userId,
                 username,
                 preferredElements: [],
-                preferredContent,
                 createdAt: new Date()
             };
             recruitment.participants.set(userId, participant);
-        } else {
-            participant.preferredContent = preferredContent;
         }
         
-        // 募集メッセージを更新
-        await this.updateRecruitmentMessage(recruitmentId);
-        
-        return { 
-            success: true, 
-            message: `${username}さんが「${preferredContent}」を希望しました！` 
-        };
+        return participant;
     }
-    
+
     /**
-     * 参加者の参加可能時間を設定
+     * エラーハンドリング
      */
-    async setParticipantAvailableTime(
-        recruitmentId: string,
-        userId: string,
-        username: string,
-        availableFromTime: string
-    ): Promise<{success: boolean, message: string}> {
-        const recruitment = this.recruitments.get(recruitmentId);
-        if (!recruitment) {
-            return { success: false, message: "募集が見つかりません。" };
-        }
-        
-        if (recruitment.status === 'closed') {
-            return { success: false, message: "この募集は既に締め切られています。" };
-        }
-        
-        // 既存の参加者情報を取得または新規作成
-        let participant = recruitment.participants.get(userId);
-        
-        if (!participant) {
-            participant = {
-                userId,
-                username,
-                preferredElements: [],
-                availableFromTime,
-                createdAt: new Date()
-            };
-            recruitment.participants.set(userId, participant);
-        } else {
-            participant.availableFromTime = availableFromTime;
-        }
-        
-        // 募集メッセージを更新
-        await this.updateRecruitmentMessage(recruitmentId);
-        
-        return { 
-            success: true, 
-            message: `${username}さんの参加可能時間を「${availableFromTime}～」に設定しました！` 
+    private handleError(context: string, error: unknown): RecruitmentResult {
+        Logger.error(context, error);
+        return {
+            success: false,
+            message: "操作に失敗しました",
+            error: error instanceof Error ? error : new Error(String(error))
         };
     }
-    
+
     /**
-     * 参加をキャンセルする
+     * 日付の安全なフォーマット
      */
-    async cancelParticipation(
-        recruitmentId: string,
-        userId: string
-    ): Promise<{success: boolean, message: string}> {
-        const recruitment = this.recruitments.get(recruitmentId);
-        if (!recruitment) {
-            return { success: false, message: "募集が見つかりません。" };
+    private formatDateSafe(date: Date | null | undefined): string {
+        if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
+            return 'Invalid Date';
         }
-        
-        if (recruitment.status === 'closed') {
-            return { success: false, message: "この募集は既に締め切られています。" };
-        }
-        
-        // 主催者は参加キャンセルできない
-        if (userId === recruitment.hostId) {
-            return { success: false, message: "主催者は参加をキャンセルできません。" };
-        }
-        
-        // 参加者から削除
-        const participant = recruitment.participants.get(userId);
-        if (!participant) {
-            return { success: false, message: "参加表明していません。" };
-        }
-        
-        recruitment.participants.delete(userId);
-        
-        // 募集メッセージを更新
-        await this.updateRecruitmentMessage(recruitmentId);
-        
-        return { 
-            success: true, 
-            message: `${participant.username}さんの参加を取り消しました。` 
-        };
+        return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
     }
-    
+
     /**
-     * コンテンツタイプを確定する（主催者用）
+     * 時間の安全なフォーマット
      */
-    async confirmContentType(
-        recruitmentId: string,
-        userId: string,
-        contentType: "天元" | "ルシゼロ"
-    ): Promise<{success: boolean, message: string}> {
-        const recruitment = this.recruitments.get(recruitmentId);
-        if (!recruitment) {
-            return { success: false, message: "募集が見つかりません。" };
+    private formatTimeSafe(date: Date | null | undefined): string {
+        if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
+            return 'Invalid Time';
         }
-        
-        if (recruitment.status === 'closed') {
-            return { success: false, message: "この募集は既に締め切られています。" };
-        }
-        
-        // 主催者のみ実行可能
-        if (userId !== recruitment.hostId) {
-            return { success: false, message: "主催者のみがコンテンツを確定できます。" };
-        }
-        
-        // コンテンツタイプを設定
-        recruitment.confirmedContent = contentType;
-        
-        // 募集メッセージを更新
-        await this.updateRecruitmentMessage(recruitmentId);
-        
-        return { 
-            success: true, 
-            message: `コンテンツを「${contentType}」に確定しました！` 
-        };
+        return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     }
-    
+
+    // ... [続く]
+        // ... [前のコードの続き]
+
     /**
      * 募集を閉じる
      */
     async closeRecruitment(
         recruitmentId: string,
         userId: string
-    ): Promise<{success: boolean, message: string}> {
-        const recruitment = this.recruitments.get(recruitmentId);
-        if (!recruitment) {
-            return { success: false, message: "募集が見つかりません。" };
+    ): Promise<RecruitmentResult> {
+        try {
+            const recruitment = await this.getValidRecruitment(recruitmentId);
+            if (!recruitment.success || !recruitment.data) {
+                return recruitment;
+            }
+
+            if (userId !== recruitment.data.hostId) {
+                return {
+                    success: false,
+                    message: "主催者のみが募集を締め切れます。"
+                };
+            }
+
+            recruitment.data.status = 'closed';
+            
+            // コンテンツタイプの自動決定
+            await this.determineContentType(recruitment.data);
+            
+            // 参加者選出と属性割り振り
+            recruitment.data.selectedParticipants = await this.selectParticipants(recruitment.data);
+            await this.assignElementsToParticipants(recruitment.data);
+            
+            // メッセージの更新と結果通知
+            await this.updateRecruitmentAndSendResults(recruitment.data);
+            
+            return {
+                success: true,
+                message: "募集を締め切り、メンバーを確定しました。"
+            };
+        } catch (error) {
+            return this.handleError('募集締め切りエラー', error);
         }
-        
-        if (recruitment.status === 'closed') {
-            return { success: false, message: "この募集は既に締め切られています。" };
-        }
-        
-        // 主催者のみ実行可能
-        if (userId !== recruitment.hostId) {
-            return { success: false, message: "主催者のみが募集を締め切れます。" };
-        }
-        
-        // 募集を締め切り
-        recruitment.status = 'closed';
-        
-        // 参加者が確定していない場合は自動決定
+    }
+
+    /**
+     * コンテンツタイプを決定
+     */
+    private async determineContentType(recruitment: Recruitment): Promise<void> {
         if (!recruitment.confirmedContent && recruitment.contentType === '参加者希望') {
-            // 希望の多い方を採用
             const contentCounts = {
                 '天元': 0,
                 'ルシゼロ': 0
@@ -581,282 +671,57 @@ export class RecruitmentManager {
                 } else if (participant.preferredContent === 'ルシゼロ') {
                     contentCounts['ルシゼロ']++;
                 }
-                // 「どれでも可」は集計しない
             }
             
             recruitment.confirmedContent = contentCounts['天元'] >= contentCounts['ルシゼロ'] 
                 ? '天元' 
                 : 'ルシゼロ';
         }
-        
-        // 参加者選出
-        recruitment.selectedParticipants = this.selectParticipants(recruitment);
-        
-        // 属性割り振り
-        this.assignElementsToParticipants(recruitment);
-        
-        // 募集メッセージを更新
-        await this.updateRecruitmentMessage(recruitmentId);
-        
-        // 結果メッセージを送信
+    }
+
+    /**
+     * 募集の更新と結果の送信
+     */
+    private async updateRecruitmentAndSendResults(recruitment: Recruitment): Promise<void> {
         try {
-            const channel = await this.client.channels.fetch(recruitment.channelId) as TextChannel;
+            await this.updateRecruitmentMessage(recruitment.id);
+            
+            const channel = await this.safeChannelFetch(recruitment.channelId);
+            if (!channel) {
+                throw new RecruitmentError('Channel not found', 'CHANNEL_NOT_FOUND');
+            }
+            
             const resultEmbed = this.createResultEmbed(recruitment);
+            await channel.send({ embeds: [resultEmbed] });
             
-            await channel.send({
-                embeds: [resultEmbed]
-            });
-            
-            if (recruitment.participants.size > config.defaults.participantLimit) {
-                await channel.send({
-                    content: `6人を超える参加希望があったため、主催者を含む6人が**公平に**選出されました。` +
-                              `選出は同日の参加回数が少ないプレイヤーを優先しています。`
-                });
+            if (recruitment.participants.size > RECRUITMENT_CONSTANTS.MAX_PARTICIPANTS) {
+                await this.sendParticipantLimitMessage(channel);
             }
         } catch (error) {
             Logger.error('結果メッセージ送信エラー:', error);
+            throw error;
         }
-        
-        return { 
-            success: true, 
-            message: "募集を締め切り、メンバーを確定しました。" 
-        };
     }
-    
+
     /**
-     * 参加者選出アルゴリズム
+     * 参加者制限メッセージの送信
      */
-    private selectParticipants(recruitment: Recruitment): string[] {
-        // 開催日の日付文字列を取得（YYYY-MM-DD形式）
-        const dateStr = this.formatDateString(recruitment.startTime);
-        
-        // 1. 時間制約を考慮した参加可能ユーザーのフィルタリング
-        const confirmedStartTime = this.findEarliestFullParticipationTime(recruitment);
-        recruitment.confirmedStartTime = confirmedStartTime;
-        
-        const eligibleParticipantIds = Array.from(recruitment.participants.values())
-            .filter(p => this.isTimeAvailable(p.availableFromTime, confirmedStartTime))
-            .map(p => p.userId);
-        
-        // 2. 主催者を確定参加リストに追加
-        const selectedParticipants: string[] = [];
-        if (eligibleParticipantIds.includes(recruitment.hostId)) {
-            selectedParticipants.push(recruitment.hostId);
-        }
-        
-        // 3. 主催者を除外した応募者リストを作成
-        const applicants = eligibleParticipantIds.filter(id => id !== recruitment.hostId);
-        
-        // 4. 残り枠の人数
-        const remainingSlots = config.defaults.participantLimit - selectedParticipants.length;
-        
-        // 5. 応募者を当日参加回数に基づいて重み付けしてランダムに選出
-        const weightedApplicants = applicants.map(userId => {
-            // 当日の参加回数を取得（低いほど優先度が高い）
-            const participationCount = GlobalParticipationManager.getDailyCount(dateStr, userId);
-            
-            // コンテンツ希望が一致しない場合は優先度を下げる
-            const participant = recruitment.participants.get(userId);
-            let contentMatchWeight = 1.0;
-            
-            if (recruitment.confirmedContent && participant?.preferredContent) {
-                if (participant.preferredContent !== 'どれでも可' && 
-                    participant.preferredContent !== recruitment.confirmedContent) {
-                    contentMatchWeight = 0.5; // 希望と異なるコンテンツは優先度半減
-                }
-            }
-            
-            return {
-                userId,
-                weight: contentMatchWeight * (1 / (participationCount + 1)) // 参加回数0回なら重み1、1回なら1/2、2回なら1/3...
-            };
+    private async sendParticipantLimitMessage(channel: TextChannel): Promise<void> {
+        await channel.send({
+            content: 
+                `${RECRUITMENT_CONSTANTS.MAX_PARTICIPANTS}人を超える参加希望があったため、` +
+                `主催者を含む${RECRUITMENT_CONSTANTS.MAX_PARTICIPANTS}人が**公平に**選出されました。\n` +
+                `選出は同日の参加回数が少ないプレイヤーを優先しています。`
         });
-        
-        // 応募者が残り枠以下なら全員選出
-        if (applicants.length <= remainingSlots) {
-            selectedParticipants.push(...applicants);
-        } else {
-            // 重み付きランダム選出
-            const selected = this.weightedRandomSelection(weightedApplicants, remainingSlots);
-            selectedParticipants.push(...selected);
-            
-            // 補欠リスト作成
-            recruitment.waitingList = applicants.filter(id => !selectedParticipants.includes(id));
-        }
-        
-        // 8. 選ばれた参加者の当日参加回数をインクリメント
-        for (const userId of selectedParticipants) {
-            GlobalParticipationManager.recordParticipation(dateStr, userId);
-        }
-        
-        return selectedParticipants;
     }
-    
+
     /**
-     * 重み付きランダム選出
-     */
-    private weightedRandomSelection(
-        weightedItems: { userId: string, weight: number }[], 
-        count: number
-    ): string[] {
-        const selected: string[] = [];
-        const availableItems = [...weightedItems];
-        
-        while (selected.length < count && availableItems.length > 0) {
-            // 合計重み
-            const totalWeight = availableItems.reduce((sum, item) => sum + item.weight, 0);
-            
-            // ランダム値
-            const randomValue = Math.random() * totalWeight;
-            
-            // 選出
-            let cumulativeWeight = 0;
-            let selectedIndex = -1;
-            
-            for (let i = 0; i < availableItems.length; i++) {
-                cumulativeWeight += availableItems[i].weight;
-                if (randomValue <= cumulativeWeight) {
-                    selectedIndex = i;
-                    break;
-                }
-            }
-            
-            if (selectedIndex !== -1) {
-                selected.push(availableItems[selectedIndex].userId);
-                availableItems.splice(selectedIndex, 1);
-            } else {
-                // エラー回避のため、先頭を選択
-                selected.push(availableItems[0].userId);
-                availableItems.splice(0, 1);
-            }
-        }
-        
-        return selected;
-    }
-    
-    /**
-     * 参加者に属性を割り振る
-     */
-    private assignElementsToParticipants(recruitment: Recruitment): void {
-        if (!recruitment.selectedParticipants) return;
-        
-        // 既に割り当てられた属性を記録
-        const assignedElements = new Set<Element>();
-        
-        // 参加者の希望属性を集計
-        const participantPreferences: { userId: string, elements: Element[] }[] = [];
-        
-        for (const userId of recruitment.selectedParticipants) {
-            const participant = recruitment.participants.get(userId);
-            if (participant) {
-                participantPreferences.push({
-                    userId,
-                    elements: participant.preferredElements
-                });
-            }
-        }
-        
-        // 希望属性が少ない順にソート（希望が1つだけの人を優先）
-        participantPreferences.sort((a, b) => a.elements.length - b.elements.length);
-        
-        // 属性を割り当て
-        for (const { userId, elements } of participantPreferences) {
-            const participant = recruitment.participants.get(userId);
-            if (!participant) continue;
-            
-            // 希望属性で未割当のものがあれば割り当て
-            let assigned = false;
-            for (const element of elements) {
-                if (!assignedElements.has(element)) {
-                    participant.assignedElement = element;
-                    assignedElements.add(element);
-                    assigned = true;
-                    break;
-                }
-            }
-            
-            // 希望属性が全て割り当て済みなら、未割当の属性からランダムに割り当て
-            if (!assigned) {
-                const availableElements = ELEMENTS.filter(e => !assignedElements.has(e));
-                if (availableElements.length > 0) {
-                    const randomElement = availableElements[Math.floor(Math.random() * availableElements.length)];
-                    participant.assignedElement = randomElement;
-                    assignedElements.add(randomElement);
-                }
-            }
-        }
-    }
-    
-    /**
-     * 最も早い全員参加可能な時間を見つける
-     */
-    private findEarliestFullParticipationTime(recruitment: Recruitment): string {
-        // 参加者の開始可能時間を収集
-        const availableTimes: Record<string, number> = {};
-        
-        // 募集時間をデフォルトに設定
-        const defaultTime = this.formatTime(recruitment.startTime);
-        availableTimes[defaultTime] = 0;
-        
-        // 各参加者の時間制約を集計
-        for (const [_, participant] of recruitment.participants.entries()) {
-            if (participant.availableFromTime) {
-                if (!availableTimes[participant.availableFromTime]) {
-                    availableTimes[participant.availableFromTime] = 0;
-                }
-                availableTimes[participant.availableFromTime]++;
-            } else {
-                // 時間指定がない場合はデフォルト時間で参加可能
-                availableTimes[defaultTime]++;
-            }
-        }
-        
-        // 開始可能時間を時間順にソート
-        const sortedTimes = Object.keys(availableTimes).sort();
-        
-        // 各時間に参加可能な人数を累積的に集計
-        const cumulativeCounts: Record<string, number> = {};
-        let runningCount = 0;
-        
-        for (const time of sortedTimes) {
-            runningCount += availableTimes[time];
-            cumulativeCounts[time] = runningCount;
-        }
-        
-        // 全員が参加可能な最も早い時間を見つける
-        const totalParticipants = recruitment.participants.size;
-        for (const time of sortedTimes) {
-            if (cumulativeCounts[time] >= totalParticipants) {
-                return time;
-            }
-        }
-        
-        // 見つからない場合はデフォルト時間を返す
-        return defaultTime;
-    }
-    
-    /**
-     * 指定された時間に参加可能かチェック
-     */
-    private isTimeAvailable(availableFromTime: string | undefined, startTime: string): boolean {
-        if (!availableFromTime) return true;
-        
-        // 時間の比較（HH:MM形式）
-        const [availableHour, availableMinute] = availableFromTime.split(':').map(n => parseInt(n, 10));
-        const [startHour, startMinute] = startTime.split(':').map(n => parseInt(n, 10));
-        
-        if (availableHour < startHour) return true;
-        if (availableHour > startHour) return false;
-        return availableMinute <= startMinute;
-    }
-    
-    /**
-     * 結果表示用Embedを作成
+     * 結果表示用Embedの作成
      */
     private createResultEmbed(recruitment: Recruitment): EmbedBuilder {
-        const dateStr = this.formatDate(recruitment.startTime);
+        const dateStr = this.formatDateSafe(recruitment.startTime);
         const contentType = this.getDisplayContentType(recruitment);
-        const startTime = recruitment.confirmedStartTime || this.formatTime(recruitment.startTime);
+        const startTime = recruitment.confirmedStartTime || this.formatTimeSafe(recruitment.startTime);
         
         const embed = new EmbedBuilder()
             .setTitle(`【${contentType}】募集結果`)
@@ -868,14 +733,23 @@ export class RecruitmentManager {
             )
             .setColor(config.colors.success)
             .setTimestamp();
-            
+
         // 確定メンバーを表示
+        this.addConfirmedMembersToEmbed(embed, recruitment);
+        
+        return embed;
+    }
+
+    /**
+     * Embedに確定メンバーを追加
+     */
+    private addConfirmedMembersToEmbed(embed: EmbedBuilder, recruitment: Recruitment): void {
         embed.addFields({
             name: '【確定メンバー】',
             value: ' ',
             inline: false
         });
-        
+
         // 属性ごとに参加者を表示
         for (const element of ELEMENTS) {
             const assignedUser = Array.from(recruitment.participants.values())
@@ -887,9 +761,9 @@ export class RecruitmentManager {
                 inline: true
             });
         }
-        
-        // 補欠リストがあれば表示
-        if (recruitment.waitingList && recruitment.waitingList.length > 0) {
+
+        // 補欠リストの表示
+        if (recruitment.waitingList?.length) {
             const waitingUsers = recruitment.waitingList
                 .map(id => recruitment.participants.get(id)?.username || id)
                 .join(', ');
@@ -900,74 +774,12 @@ export class RecruitmentManager {
                 inline: false
             });
         }
-        
-        return embed;
     }
-    
-    /**
-     * 募集メッセージを更新
-     */
-    async updateRecruitmentMessage(recruitmentId: string): Promise<boolean> {
-        const recruitment = this.recruitments.get(recruitmentId);
-        if (!recruitment) {
-            return false;
-        }
-        
-        try {
-            const channel = await this.client.channels.fetch(recruitment.channelId) as TextChannel;
-            if (!channel) {
-                return false;
-            }
-            
-            const message = await channel.messages.fetch(recruitmentId);
-            if (!message) {
-                return false;
-            }
-            
-            const embed = this.createRecruitmentEmbed(recruitment);
-            const components = recruitment.status === 'open' 
-                ? this.createRecruitmentComponents(recruitment)
-                : [];
-                
-            await message.edit({
-                embeds: [embed],
-                components
-            });
-            
-            return true;
-        } catch (error) {
-            Logger.error('メッセージ更新エラー:', error);
-            return false;
-        }
-    }
-    
+
     /**
      * 表示用のコンテンツタイプを取得
      */
     private getDisplayContentType(recruitment: Recruitment): string {
         return recruitment.confirmedContent || recruitment.contentType;
-    }
-    
-    /**
-     * 日付のフォーマット (YYYY/MM/DD)
-     */
-    private formatDate(date: Date): string {
-        return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
-    }
-    
-    /**
-     * 時間のフォーマット (HH:MM)
-     */
-    private formatTime(date: Date): string {
-        const hours = date.getHours().toString().padStart(2, '0');
-        const minutes = date.getMinutes().toString().padStart(2, '0');
-        return `${hours}:${minutes}`;
-    }
-    
-    /**
-     * 日付文字列のフォーマット (YYYY-MM-DD)
-     */
-    private formatDateString(date: Date): string {
-        return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
     }
 }
