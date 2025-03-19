@@ -50,3 +50,29 @@ export class GlobalParticipationManager {
         this.dailyData.get(date)?.set(userId, currentCount + 1);
     }
 }
+// src/structures/Recruitment.ts に追加
+export interface Recruitment {
+    id: string;
+    contentType: ContentType;
+    startTime: Date;
+    hostId: string;
+    hostName: string;
+    channelId: string;
+    note?: string;
+    participants: Map<string, ParticipantData>;
+    status: RecruitmentStatus;
+    waitingList?: string[];  // 追加
+    confirmedContent?: ContentPreference;  // 追加
+    selectedParticipants?: string[];  // 追加
+    confirmedStartTime?: string;  // 追加
+  }
+  
+  export interface ParticipantData {
+    userId: string;
+    username: string;
+    preferredElements: Element[];
+    createdAt: Date;
+    preferredContent?: ContentPreference;  // 追加
+    availableFromTime?: string;  // 追加
+    assignedElement?: Element;  // 追加
+  }
