@@ -34,6 +34,7 @@ export class RecruitmentManager {
     private recruitments: Map<string, Recruitment> = new Map();
     private client: Client;
     private globalParticipationManager: GlobalParticipationManager;
+    selectParticipants: any;
     
     constructor(client: Client) {
         this.client = client;
@@ -808,61 +809,6 @@ export class RecruitmentManager {
             }
         }
     
-        /**
-         * 参加者を選出する
-         * 不足していたメソッドの実装
-         */
-        private async selectParticipants(recruitment: Recruitment): Promise<string[]> {
-            try {
-                // 主催者は必ず参加
-                const hostId = recruitment.hostId;
-                const selectedParticipants: string[] = [hostId];
-                
-                // 主催者以外の参加者をリストアップ
-                const otherParticipants = Array.from(recruitment.participants.entries())
-                    .filter(([id]) => id !== hostId)
-                    .map(([id, participant]) => ({
-                        id,
-                        participant,
-                        // 参加回数を取得（グローバル参加状況から）
-                        participationCount: this.globalParticipationManager.getParticipationCount(id) || 0
-                    }));
-                
-                // 残りの空きスロット
-                const remainingSlots = RECRUITMENT_CONSTANTS.MAX_PARTICIPANTS - 1; // 主催者を除く
-                
-                if (otherParticipants.length <= remainingSlots) {
-                    // 参加者が最大数以下なら全員選出
-                    selectedParticipants.push(...otherParticipants.map(p => p.id));
-                } else {
-                    // 参加者が多い場合は参加回数が少ない順に選出
-                    const sortedParticipants = otherParticipants.sort((a, b) => {
-                        // 参加回数が少ない順
-                        const countDiff = a.participationCount - b.participationCount;
-                        if (countDiff !== 0) return countDiff;
-                        
-                        // 同じ参加回数の場合は先に参加した順
-                        return a.participant.createdAt.getTime() - b.participant.createdAt.getTime();
-                    });
-                    
-                    // 残りのスロット分だけ追加
-                    selectedParticipants.push(...sortedParticipants.slice(0, remainingSlots).map(p => p.id));
-                    
-                    // 補欠リストを作成
-                    recruitment.waitingList = sortedParticipants.slice(remainingSlots).map(p => p.id);
-                }
-                
-                // 選出された参加者の参加回数を増加
-                selectedParticipants.forEach(id => {
-                    this.globalParticipationManager.incrementParticipationCount(id);
-                });
-                
-                return selectedParticipants;
-            } catch (error) {
-                Logger.error('参加者選出エラー:', error);
-                throw error;
-            }
-        }
             /**
      * 参加者に属性を割り当てる
      * 不足していたメソッドの実装
@@ -874,7 +820,14 @@ export class RecruitmentManager {
             }
             
             // 各属性の希望者をマッピング
-            const elementPreferences: Record<Element, string[]> = {};
+            const elementPreferences: Record<Element, string[]> = {
+                火: [],
+                水: [],
+                土: [],
+                風: [],
+                光: [],
+                闇: []
+            };
             ELEMENTS.forEach(element => {
                 elementPreferences[element] = [];
             });
@@ -891,7 +844,14 @@ export class RecruitmentManager {
             
             // 属性の割り当て結果
             const assignedElements: Record<string, Element> = {};
-            const assignedUsers: Record<Element, string> = {};
+            const assignedUsers: Record<Element, string> = {
+                火: '',
+                水: '',
+                土: '',
+                風: '',
+                光: '',
+                闇: ''
+            };
             
             // 1. まず希望者が1人だけの属性から割り当て
             for (const element of ELEMENTS) {
