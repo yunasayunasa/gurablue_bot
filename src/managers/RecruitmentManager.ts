@@ -7,7 +7,8 @@ import {
     StringSelectMenuOptionBuilder,
     TextChannel,
     Client,
-    Message
+    Message,
+    MessageEditOptions,
 } from 'discord.js';
 import { 
     Recruitment, 
@@ -33,12 +34,10 @@ type ChannelType = TextChannel | null;
 export class RecruitmentManager {
     private recruitments: Map<string, Recruitment> = new Map();
     private client: Client;
-    private globalParticipationManager: GlobalParticipationManager;
     selectParticipants: any;
     
     constructor(client: Client) {
         this.client = client;
-        this.globalParticipationManager = new GlobalParticipationManager();
     }
     
     /**
