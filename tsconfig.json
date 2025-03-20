@@ -1,19 +1,17 @@
 {
-    "compilerOptions": {
-        "target": "es2021",
-        "module": "es2022",
-        "lib": ["es2021"],
-        "declaration": true,
-        "sourceMap": true,
-        "outDir": "./dist",
-        "rootDir": "./src",
-        "strict": false,
-        "moduleResolution": "node",
-        "esModuleInterop": true,
-        "experimentalDecorators": true,
-        "emitDecoratorMetadata": true,
-        "skipLibCheck": true,
-        "forceConsistentCasingInFileNames": true
-    },
-    "exclude": ["dist", "node_modules", "tests"]
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Node",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
