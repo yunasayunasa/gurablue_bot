@@ -28,14 +28,13 @@ import {
     RecruitmentResult,
     RecruitmentError
 } from '../types/recruitment';
-import { handleRecruitModal } from '../interactions/modals/RecruitModalHandler.js';
 
 type ChannelType = TextChannel | null;
 
 export class RecruitmentManager {
     private recruitments: Map<string, Recruitment> = new Map();
     private client: Client;
-    
+    selectParticipants: any;
     
     constructor(client: Client) {
         this.client = client;
@@ -271,7 +270,7 @@ export class RecruitmentManager {
             
             if (recruitment.waitingList?.length) {
                 const waitingUsers = recruitment.waitingList
-                    .map(id => recruitment.participants.get(id)?.username || `${id}`)
+                    .map(id => recruitment.participants.get(id)?.username || id)
                     .join(', ');
                 
                 embed.addFields({
@@ -618,7 +617,7 @@ export class RecruitmentManager {
             if (!recruitment.success || !recruitment.data) {
                 return recruitment;
             }
-        
+
             if (userId !== recruitment.data.hostId) {
                 return {
                     success: false,
@@ -644,61 +643,6 @@ export class RecruitmentManager {
             };
         } catch (error) {
             return this.handleError('募集締め切りエラー', error);
-        }
-    }
-/**
- * 参加者を選出する
- */
-private async selectParticipants(recruitment: Recruitment): Promise<string[]> {
-    try {
-        // 参加者リストの取得
-        const allParticipantIds = Array.from(recruitment.participants.keys());
-        
-        // 主催者は必ず選出
-        const hostId = recruitment.hostId;
-        const selectedParticipants: string[] = [hostId];
-        
-        // 主催者以外の参加者
-        const otherParticipants = allParticipantIds.filter(id => id !== hostId);
-        
-        // 最大参加人数から主催者を引いた数
-        const remainingSlots = RECRUITMENT_CONSTANTS.MAX_PARTICIPANTS - 1;
-        
-        if (otherParticipants.length <= remainingSlots) {
-            // 参加者数が上限以下の場合は全員選出
-            selectedParticipants.push(...otherParticipants);
-        } else {
-            // 参加者数が上限を超える場合
-            // GlobalParticipationManagerから参加履歴を取得して優先順位付け
-            
-            const participationCounts = await GlobalParticipationManager.getParticipationCounts();
-            
-            // 参加回数の少ない順にソート
-            const sortedParticipants = otherParticipants.sort((a, b) => {
-                const countA = participationCounts[a] || 0;
-                const countB = participationCounts[b] || 0;
-                
-                // 参加回数が同じ場合は参加申請時間の早い順
-                if (countA === countB) {
-                    const timeA = recruitment.participants.get(a)?.createdAt?.getTime() || 0;
-                    const timeB = recruitment.participants.get(b)?.createdAt?.getTime() || 0;
-                    return timeA - timeB;
-                }
-                
-                return countA - countB;
-            });
-            
-            // 上限までの参加者を選出
-            selectedParticipants.push(...sortedParticipants.slice(0, remainingSlots));
-            
-            // 選ばれなかった参加者は待機リストへ
-            recruitment.waitingList = sortedParticipants.slice(remainingSlots);
-        }
-        
-        return selectedParticipants;
-    } catch (error) {
-        Logger.error('参加者選出エラー:', error);
-        throw error;
     }
 }
 
@@ -811,7 +755,7 @@ private async selectParticipants(recruitment: Recruitment): Promise<string[]> {
             // 補欠リストの表示
             if (recruitment.waitingList?.length) {
                 const waitingUsers = recruitment.waitingList
-                    .map(id => recruitment.participants.get(id)?.username || id.toString())
+                    .map(id => recruitment.participants.get(id)?.username || id)
                     .join(', ');
                     
                 embed.addFields({
